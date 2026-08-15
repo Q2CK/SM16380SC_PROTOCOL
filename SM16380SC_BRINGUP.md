@@ -18,22 +18,28 @@ Change `SM16380SC_SCAN_ROWS` and `SM16380SC_CHIPS_PER_LANE` if the panel differs
 
 ## NUCLEO-F446RE wiring
 
-| HUB75 | STM32F446RE | GPIO |
+| Display Pins | STM32 Pins | Board Pins |
 |---|---|---|
-| CLK/DCLK | PC4 | GPIOC bit 4 |
-| LAT/LE | PC5 | GPIOC bit 5 |
-| R1 | PC6 | GPIOC bit 6 |
-| G1 | PC7 | GPIOC bit 7 |
-| B1 | PC8 | GPIOC bit 8 |
-| R2 | PC9 | GPIOC bit 9 |
-| G2 | PC10 | GPIOC bit 10 |
-| B2 | PC11 | GPIOC bit 11 |
-| OE/GCLK | PA8 | GPIOA bit 8 |
-| A | PB4 | GPIOB bit 4 |
-| B | PB5 | GPIOB bit 5 |
-| C | PB6 | GPIOB bit 6 |
-| D | PB7 | GPIOB bit 7 |
-| E | PB8 | GPIOB bit 8 |
+| CLK / DCLK | PC4 | CN10 pin 34 |
+| LAT / LE | PC5 | CN10 pin 6 |
+| R1 | PC6 | CN10 pin 4 |
+| G1 | PC7 | CN10 pin 19; Arduino D9 |
+| B1 | PC8 | CN10 pin 2 |
+| R2 | PC9 | CN10 pin 1 |
+| G2 | PC10 | CN7 pin 1 |
+| B2 | PC11 | CN7 pin 2 |
+| OE / GCLK | PA8 | CN10 pin 23; Arduino D7 |
+| A | PB4 | CN10 pin 27; Arduino D5 |
+| B | PB5 | CN10 pin 29; Arduino D4 |
+| C | PB6 | CN10 pin 17; Arduino D10 |
+| D | PB7 | CN7 pin 21 |
+| E | PB8 | CN10 pin 3; Arduino D15 |
+| GND | GND | CN7 pin 19 or 20; CN10 pin 9 or 20 |
+
+Connector numbering follows ST's NUCLEO-F446RE Morpho connector drawing. View
+the board with the component side facing up and confirm the connector pin-1
+marking before wiring; odd and even pin columns run on opposite sides of each
+Morpho header.
 
 Connect controller ground to panel ground. Power the panel separately. If the
 SM16380SC is powered at 5 V, place a 74AHCT245-class buffer between the 3.3 V MCU
