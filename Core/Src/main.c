@@ -201,26 +201,19 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : SM_DCLK_Pin SM_LE_Pin SM_R1_Pin SM_G1_Pin
-                           SM_B1_Pin SM_G2_Pin SM_B2_Pin */
+                           SM_B1_Pin SM_R2_Pin SM_G2_Pin SM_B2_Pin */
   GPIO_InitStruct.Pin = SM_DCLK_Pin|SM_LE_Pin|SM_R1_Pin|SM_G1_Pin
-                          |SM_B1_Pin|SM_G2_Pin|SM_B2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : SM_R2_Pin */
-  GPIO_InitStruct.Pin = SM_R2_Pin;
+                          |SM_B1_Pin|SM_R2_Pin|SM_G2_Pin|SM_B2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  HAL_GPIO_Init(SM_R2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SM_GCLK_Pin */
   GPIO_InitStruct.Pin = SM_GCLK_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(SM_GCLK_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : SM_ADDR_A_Pin SM_ADDR_B_Pin SM_ADDR_C_Pin SM_ADDR_D_Pin
@@ -229,7 +222,7 @@ static void MX_GPIO_Init(void)
                           |SM_ADDR_E_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
