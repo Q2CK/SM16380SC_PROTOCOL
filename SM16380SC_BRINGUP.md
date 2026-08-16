@@ -6,15 +6,53 @@ spends all its time bit-banging GCLK and row addresses.
 
 ## Assumed panel
 
-Defaults in `Core/Inc/sm16380sc.h`:
+Topology configured in `Core/Inc/sm16380sc.h`:
 
 * SM16380SC, original seven-register protocol;
-* 64 electrical pixels per serial lane;
-* four daisy-chained 16-output chips per RGB lane;
-* 32 scan rows (1/32 scan);
+* two daisy-chained 64x32 modules, producing a 128x32 display;
+* each module has 24 chips: eight red, eight green and eight blue;
+* the six HUB75 RGB lanes divide those into four chips per lane per module;
+* eight daisy-chained 16-output chips per RGB lane across both modules;
+* 16 scan addresses (1/16 scan), with two physical rows active together;
 * six parallel HUB75 RGB lanes.
 
-Change `SM16380SC_SCAN_ROWS` and `SM16380SC_CHIPS_PER_LANE` if the panel differs.
+This produces `16 outputs * 8 chips = 128` horizontal pixels per lane. R1/G1/B1
+carry one physical row and R2/G2/B2 carry the second simultaneously active row.
+
+## FMPWM and GCLK count
+
+The first-light profile uses FMPWM mode 3. FMPWM occupies CFG1 bits 14:13 and
+reduces the number of external GCLK pulses required per row:
+
+```c
+#define SM16380SC_FMPWM_MODE 3u
+#define SM16380SC_GCLK_PER_ROW \
+    ((1024u >> SM16380SC_FMPWM_MODE) + 3u)
+```
+
+| FMPWM | Required GCLK pulses per row |
+|---:|---:|
+| 0 | 1027 |
+| 1 | 515 |
+| 2 | 259 |
+| 3 | 131 |
+
+The `1024` and extra three clocks come from the working F446RE reference driver.
+The public datasheet advertises scan-frequency multiplication but does not expose
+the internal formula or value-to-multiplier encoding. Do not change FMPWM without
+also changing the GCLK count: CFG1, the internal PWM/SRAM row progression, and
+the STM32's A..E transition interval must agree.
+
+For this 1/16-scan topology, approximate refresh is:
+
+```text
+refresh_hz = actual_gclk_hz / (SM16380SC_GCLK_PER_ROW * 16)
+```
+
+Mode 3 with 131 pulses is the strongest initial setting because it is used by
+the known-working reference. A vendor-controller capture can confirm it by
+counting GCLK rising edges between consecutive A..E address changes. The fuller
+derivation and uncertainty notes are in `../SM16380_PROTOCOL.md`.
 
 ## NUCLEO-F446RE wiring
 
@@ -49,15 +87,32 @@ This is the same GPIO assignment used by the downloaded NUCLEO-F446RE SM16380
 reference project. The Nucleo silkscreen/header position should still be checked
 against the UM1724 board pinout before wiring.
 
+## Verified serial/upload behavior
+
+GCLK must remain active during configuration and grayscale upload on the tested
+panels. Holding it low left the grayscale SRAM at its random cold-start state.
+The timer-free firmware therefore emits one software GCLK pulse after every
+serial DCLK pulse. After the complete payload it sends a separate three-DCLK
+VSYNC command and rewrites the seven configuration registers, matching the
+known reference sequence.
+
+The verified payload nesting is `[row][OUT0..15][logical chip 0..7][bit15..0]`.
+LE is high only on the last bit of chip 7 for each OUT group. Reversing the chip
+index produced scrambled 16-pixel rectangles; increasing order produced the
+correct image.
+
 ## Test image
 
-The uploaded electrical test pattern contains four 16-output vertical bars:
-red, green, blue, and yellow. The second HUB75 RGB triplet is dimmer. A white
-diagonal is added to reveal row and output order.
+The active image is a full-screen horizontal rainbow, identical on all 32
+physical rows, running red-yellow-green-cyan-blue-magenta-red across 128 pixels.
+It contains no intentional white border or horizontal marker lines.
 
-If 16-pixel blocks are horizontally reversed, reverse the chip index in
-`SM16380SC_UploadTestImage()`. If pixels inside every block are reversed, change
-the OUT mapping in `test_pixel()`.
+The rainbow and grayscale upload are verified. A brief line flicker at roughly
+two-second intervals remains under investigation. It occurs in every tested
+FMPWM mode and remained after disabling interrupts, so it must not be documented
+as an FMPWM or SysTick diagnosis. Current candidates are GCLK/address boundary
+timing, signal integrity, or power/ground behavior. The production timer-based
+scanner must be validated with a logic analyser rather than assuming it fixed.
 
 ## Build
 

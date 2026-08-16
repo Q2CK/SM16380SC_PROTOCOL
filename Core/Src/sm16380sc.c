@@ -49,9 +49,11 @@ static inline void gclk_pulse(void)
 
 static inline void write_rgb6(uint32_t rgb)
 {
-    /* Reset all six lanes, then set the requested lanes atomically. */
-    SM_BUS_GPIO->BSRR = ((uint32_t)SM_RGB_PIN_MASK << 16u) |
-                        (rgb & SM_RGB_PIN_MASK);
+    const uint32_t high = rgb & SM_RGB_PIN_MASK;
+    const uint32_t low = SM_RGB_PIN_MASK & ~high;
+
+    /* Never request set and reset for the same GPIO in one BSRR write. */
+    SM_BUS_GPIO->BSRR = (low << 16u) | high;
 }
 
 static uint32_t pack_gray_bit(const SM16380SC_Gray6 *gray, unsigned bit)
@@ -84,6 +86,7 @@ static void shift_gray6(const SM16380SC_Gray6 *gray,
 
         bus_delay();
         dclk_pulse();
+        gclk_pulse();
     }
 
     bus_clear(SM_LE_PIN);
@@ -101,6 +104,7 @@ static void send_command(unsigned le_high_clocks)
     bus_set(SM_LE_PIN);
     for (unsigned i = 0; i < le_high_clocks; ++i) {
         dclk_pulse();
+        gclk_pulse();
     }
     bus_clear(SM_LE_PIN);
     bus_delay();
@@ -116,8 +120,9 @@ static void set_row(unsigned row)
     if ((row & 0x08u) != 0u) pins |= SM_ADDR_D_PIN;
     if ((row & 0x10u) != 0u) pins |= SM_ADDR_E_PIN;
 
-    SM_ADDR_GPIO->BSRR = ((uint32_t)SM_ADDR_PIN_MASK << 16u) |
-                         pins;
+    const uint32_t high = pins & SM_ADDR_PIN_MASK;
+    const uint32_t low = SM_ADDR_PIN_MASK & ~high;
+    SM_ADDR_GPIO->BSRR = (low << 16u) | high;
     bus_delay();
 }
 
@@ -150,43 +155,10 @@ static void write_config(uint16_t red, uint16_t green, uint16_t blue,
     broadcast_config(red, green, blue, selector);
 }
 
-void SM16380SC_GPIO_Init(void)
-{
-    GPIO_InitTypeDef gpio = {0};
-
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    __HAL_RCC_GPIOC_CLK_ENABLE();
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-
-    /* Establish all-low levels before enabling the pins as outputs. */
-    SM_BUS_GPIO->BSRR = (uint32_t)SM_BUS_PIN_MASK << 16u;
-    SM_GCLK_GPIO->BSRR = (uint32_t)SM_GCLK_PIN << 16u;
-    SM_ADDR_GPIO->BSRR = (uint32_t)SM_ADDR_PIN_MASK << 16u;
-
-    gpio.Pin = SM_BUS_PIN_MASK;
-    gpio.Mode = GPIO_MODE_OUTPUT_PP;
-    gpio.Pull = GPIO_NOPULL;
-    gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    HAL_GPIO_Init(SM_BUS_GPIO, &gpio);
-
-    gpio.Pin = SM_GCLK_PIN;
-    HAL_GPIO_Init(SM_GCLK_GPIO, &gpio);
-
-    gpio.Pin = SM_ADDR_PIN_MASK;
-    HAL_GPIO_Init(SM_ADDR_GPIO, &gpio);
-}
-
-void SM16380SC_Init(void)
+static void configure_all_registers(void)
 {
     const uint16_t cfg1 = make_cfg1();
 
-    set_row(0u);
-    write_rgb6(0u);
-    bus_clear(SM_DCLK_PIN | SM_LE_PIN);
-    SM_GCLK_GPIO->BSRR = (uint32_t)SM_GCLK_PIN << 16u;
-
-    /* Original SM16380/SM16380SC seven-register initialization. */
-    send_command(SM_CMD_VSYNC);
     write_config(cfg1,   cfg1,   cfg1,   SM_CMD_CFG1);
     write_config(0x0001, 0x0001, 0x0001, SM_CMD_CFG2);
     write_config(0x10a3, 0x1463, 0x1063, SM_CMD_CFG3);
@@ -194,6 +166,18 @@ void SM16380SC_Init(void)
     write_config(0x0000, 0x0000, 0x0000, SM_CMD_CFG5);
     write_config(0x0005, 0x0019, 0x002e, SM_CMD_CFG6);
     write_config(0x0000, 0x0000, 0x0000, SM_CMD_CFG7);
+}
+
+void SM16380SC_Init(void)
+{
+    set_row(0u);
+    write_rgb6(0u);
+    bus_clear(SM_DCLK_PIN | SM_LE_PIN);
+    SM_GCLK_GPIO->BSRR = (uint32_t)SM_GCLK_PIN << 16u;
+
+    /* Original SM16380/SM16380SC seven-register initialization. */
+    send_command(SM_CMD_VSYNC);
+    configure_all_registers();
 }
 
 /*
@@ -204,6 +188,92 @@ void SM16380SC_Init(void)
  */
 static SM16380SC_Gray6 test_pixel(unsigned row, unsigned chip, unsigned out)
 {
+#if SM16380SC_TEST_PATTERN == SM16380SC_TEST_SOLID_RED
+    (void)row;
+    (void)chip;
+    (void)out;
+    return (SM16380SC_Gray6) {
+        .r1 = SM16380SC_TEST_LEVEL,
+        .r2 = SM16380SC_TEST_LEVEL,
+    };
+#elif SM16380SC_TEST_PATTERN == SM16380SC_TEST_RAINBOW
+    const unsigned x = chip * 16u + out;
+    const uint16_t full = 0xf000u;
+    const unsigned wheel = x * 6u;
+    const unsigned segment = wheel / SM16380SC_PANEL_WIDTH;
+    const uint16_t fade = (uint16_t)(((wheel % SM16380SC_PANEL_WIDTH) *
+                                      (uint32_t)full) /
+                                     SM16380SC_PANEL_WIDTH);
+    const uint16_t rise = fade;
+    const uint16_t fall = (uint16_t)(full - fade);
+    uint16_t r = 0u, g = 0u, b = 0u;
+
+    /* Red -> yellow -> green -> cyan -> blue -> magenta -> red. */
+    switch (segment) {
+    case 0u: r = full; g = rise;                         break;
+    case 1u: r = fall; g = full;                         break;
+    case 2u:           g = full; b = rise;               break;
+    case 3u:           g = fall; b = full;               break;
+    case 4u: r = rise;           b = full;               break;
+    default: r = full;           b = fall;               break;
+    }
+
+    (void)row;
+    return (SM16380SC_Gray6) {
+        .r1 = r, .g1 = g, .b1 = b,
+        .r2 = r, .g2 = g, .b2 = b,
+    };
+#elif SM16380SC_TEST_PATTERN == SM16380SC_TEST_TV_PATTERN
+    const unsigned x = chip * 16u + out;
+    const uint16_t full = 0xf000u;
+    const uint16_t dim = 0x3000u;
+    SM16380SC_Gray6 pixel = {0};
+
+    /* Generate one RGB value for each of the two simultaneously driven rows. */
+    for (unsigned half = 0; half < 2u; ++half) {
+        const unsigned y = row + half * SM16380SC_SCAN_ROWS;
+        uint16_t r = 0u, g = 0u, b = 0u;
+
+        if (x == 0u || x == (SM16380SC_PANEL_WIDTH - 1u) ||
+            y == 0u || y == 31u) {
+            /* White frame proves the complete 128x32 extent. */
+            r = g = b = full;
+        } else if (y < 20u) {
+            /* TV bars: white, yellow, cyan, green, magenta, red, blue. */
+            const unsigned bar = (x * 7u) / SM16380SC_PANEL_WIDTH;
+            static const uint8_t colors[7] = {
+                7u, 6u, 3u, 2u, 5u, 4u, 1u
+            };
+            const uint8_t color = colors[bar > 6u ? 6u : bar];
+            if ((color & 4u) != 0u) r = full;
+            if ((color & 2u) != 0u) g = full;
+            if ((color & 1u) != 0u) b = full;
+        } else if (y < 25u) {
+            /* Eight steps from black to white expose bit/brightness errors. */
+            const uint16_t level = (uint16_t)(((x * 8u) /
+                SM16380SC_PANEL_WIDTH) * 0x2000u);
+            r = g = b = level;
+        } else {
+            /* Fine checkerboard plus coloured 16-pixel chip boundaries. */
+            if ((((x >> 2u) ^ (y >> 1u)) & 1u) != 0u) {
+                r = g = b = dim;
+            }
+            if ((x & 15u) == 0u) {
+                r = full;
+                g = (x & 16u) != 0u ? full : 0u;
+                b = (x & 32u) != 0u ? full : 0u;
+            }
+        }
+
+        if (half == 0u) {
+            pixel.r1 = r; pixel.g1 = g; pixel.b1 = b;
+        } else {
+            pixel.r2 = r; pixel.g2 = g; pixel.b2 = b;
+        }
+    }
+
+    return pixel;
+#else
     const unsigned x = chip * 16u + out;
     const uint16_t top_level = 0x2000u;
     const uint16_t bottom_level = 0x0800u;
@@ -236,15 +306,20 @@ static SM16380SC_Gray6 test_pixel(unsigned row, unsigned chip, unsigned out)
     }
 
     return pixel;
+#endif
 }
 
 void SM16380SC_UploadTestImage(void)
 {
     for (unsigned row = 0; row < SM16380SC_SCAN_ROWS; ++row) {
         for (unsigned out = 0; out < 16u; ++out) {
-            /* First word reaches the farthest chip; last reaches the nearest. */
+            /*
+             * Match the proven driver: logical chip sections are serialized
+             * in increasing x order. The panel's internal cascade performs
+             * the physical shift; reversing here scrambles 16-pixel blocks.
+             */
             for (unsigned slot = 0; slot < SM16380SC_CHIPS_PER_LANE; ++slot) {
-                const unsigned chip = SM16380SC_CHIPS_PER_LANE - 1u - slot;
+                const unsigned chip = slot;
                 const bool final_chip =
                     slot == (SM16380SC_CHIPS_PER_LANE - 1u);
                 const SM16380SC_Gray6 pixel = test_pixel(row, chip, out);
@@ -254,8 +329,9 @@ void SM16380SC_UploadTestImage(void)
         }
     }
 
-    /* LE was low after the last grayscale latch. These are three new clocks. */
+    /* Match the working reference's post-upload commit/reconfigure sequence. */
     send_command(SM_CMD_VSYNC);
+    configure_all_registers();
 }
 
 void SM16380SC_ScanForever(void)

@@ -88,7 +88,6 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
-  SM16380SC_GPIO_Init();
   SM16380SC_Init();
   SM16380SC_UploadTestImage();
   /* USER CODE END 2 */
