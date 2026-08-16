@@ -30,6 +30,11 @@
 #define SM16380SC_GCLK_PER_ROW \
     ((1024u >> SM16380SC_FMPWM_MODE) + 3u)
 
+/* TIM1 RCR is configured for 131 periods by CubeMX in this implementation. */
+#if SM16380SC_GCLK_PER_ROW != 131u
+#error "Update TIM1 repetition count when changing SM16380SC_FMPWM_MODE"
+#endif
+
 /*
  * NUCLEO-F446RE wiring copied from the working reference project. RGB/DCLK/LE
  * share GPIOC. Row A..E are contiguous on GPIOB. GCLK is PA8.
@@ -60,9 +65,6 @@
 #define SM_G2_PIN                 SM_G2_Pin
 #define SM_B2_PIN                 SM_B2_Pin
 
-#define SM_GCLK_GPIO              SM_GCLK_GPIO_Port
-#define SM_GCLK_PIN               SM_GCLK_Pin
-
 #define SM_ADDR_GPIO              SM_ADDR_A_GPIO_Port
 #define SM_ADDR_A_PIN             SM_ADDR_A_Pin
 #define SM_ADDR_B_PIN             SM_ADDR_B_Pin
@@ -84,8 +86,8 @@ typedef struct {
     uint16_t b2;
 } SM16380SC_Gray6;
 
-void SM16380SC_Init(void);
+void SM16380SC_Init(TIM_HandleTypeDef *gclk_timer);
 void SM16380SC_UploadTestImage(void);
-void SM16380SC_ScanForever(void) __attribute__((noreturn));
+void SM16380SC_RowPeriodElapsed(void);
 
 #endif /* SM16380SC_H */

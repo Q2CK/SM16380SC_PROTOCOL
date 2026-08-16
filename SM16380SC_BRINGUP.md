@@ -1,8 +1,9 @@
-# SM16380SC bit-banged first-light firmware
+# SM16380SC first-light firmware
 
-This firmware is deliberately synchronous. It uses no display interrupts,
-timers, PWM units, or DMA. The CPU uploads a generated test image and then
-spends all its time bit-banging GCLK and row addresses.
+Grayscale DCLK/LE/RGB upload is bit-banged, while TIM1_CH1 generates GCLK on
+PA8. TIM1 runs continuously at 5 MHz. Its advanced-timer repetition counter is
+130, so one update interrupt occurs after every 131 GCLK periods; that handler
+advances the 16-state row address on PB4..PB8.
 
 ## Assumed panel
 
@@ -91,10 +92,20 @@ against the UM1724 board pinout before wiring.
 
 GCLK must remain active during configuration and grayscale upload on the tested
 panels. Holding it low left the grayscale SRAM at its random cold-start state.
-The timer-free firmware therefore emits one software GCLK pulse after every
-serial DCLK pulse. After the complete payload it sends a separate three-DCLK
+TIM1 therefore starts before configuration and remains active during all serial
+DCLK traffic. After the complete payload the driver sends a separate three-DCLK
 VSYNC command and rewrites the seven configuration registers, matching the
 known reference sequence.
+
+TIM1 uses `PSC=0`, `ARR=35`, `CCR1=18`, and `RCR=130`. With the 180 MHz APB2
+timer clock this gives 5 MHz GCLK, approximately 50% duty, one row update at
+38.17 kHz, and a complete 16-row scan at approximately 2.39 kHz. PA8 is owned
+by TIM1 alternate function; application code must never write its GPIO BSRR.
+
+This continuous-PWM version changes the address from the update ISR without
+stopping GCLK. Validate the boundary on a logic analyser. If the first clocks of
+each row occur before the address settles, switch to the documented one-pulse
+burst design, which stops GCLK low during the address transition.
 
 The verified payload nesting is `[row][OUT0..15][logical chip 0..7][bit15..0]`.
 LE is high only on the last bit of chip 7 for each OUT group. Reversing the chip

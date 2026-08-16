@@ -39,14 +39,6 @@ static inline void dclk_pulse(void)
     bus_delay();
 }
 
-static inline void gclk_pulse(void)
-{
-    SM_GCLK_GPIO->BSRR = SM_GCLK_PIN;
-    bus_delay();
-    SM_GCLK_GPIO->BSRR = (uint32_t)SM_GCLK_PIN << 16u;
-    bus_delay();
-}
-
 static inline void write_rgb6(uint32_t rgb)
 {
     const uint32_t high = rgb & SM_RGB_PIN_MASK;
@@ -86,7 +78,6 @@ static void shift_gray6(const SM16380SC_Gray6 *gray,
 
         bus_delay();
         dclk_pulse();
-        gclk_pulse();
     }
 
     bus_clear(SM_LE_PIN);
@@ -104,7 +95,6 @@ static void send_command(unsigned le_high_clocks)
     bus_set(SM_LE_PIN);
     for (unsigned i = 0; i < le_high_clocks; ++i) {
         dclk_pulse();
-        gclk_pulse();
     }
     bus_clear(SM_LE_PIN);
     bus_delay();
@@ -168,12 +158,23 @@ static void configure_all_registers(void)
     write_config(0x0000, 0x0000, 0x0000, SM_CMD_CFG7);
 }
 
-void SM16380SC_Init(void)
+void SM16380SC_Init(TIM_HandleTypeDef *gclk_timer)
 {
     set_row(0u);
     write_rgb6(0u);
     bus_clear(SM_DCLK_PIN | SM_LE_PIN);
-    SM_GCLK_GPIO->BSRR = (uint32_t)SM_GCLK_PIN << 16u;
+
+    /*
+     * TIM1 runs continuously. Its repetition counter makes one update event
+     * after exactly SM16380SC_GCLK_PER_ROW PWM periods, not after every GCLK.
+     */
+    __HAL_TIM_SET_COUNTER(gclk_timer, 0u);
+    __HAL_TIM_CLEAR_FLAG(gclk_timer, TIM_FLAG_UPDATE);
+    if (HAL_TIM_PWM_Start(gclk_timer, TIM_CHANNEL_1) != HAL_OK) {
+        Error_Handler();
+    }
+    __HAL_TIM_CLEAR_FLAG(gclk_timer, TIM_FLAG_UPDATE);
+    __HAL_TIM_ENABLE_IT(gclk_timer, TIM_IT_UPDATE);
 
     /* Original SM16380/SM16380SC seven-register initialization. */
     send_command(SM_CMD_VSYNC);
@@ -334,14 +335,13 @@ void SM16380SC_UploadTestImage(void)
     configure_all_registers();
 }
 
-void SM16380SC_ScanForever(void)
+void SM16380SC_RowPeriodElapsed(void)
 {
-    for (;;) {
-        for (unsigned row = 0; row < SM16380SC_SCAN_ROWS; ++row) {
-            set_row(row);
-            for (unsigned pulse = 0; pulse < SM16380SC_GCLK_PER_ROW; ++pulse) {
-                gclk_pulse();
-            }
-        }
+    static unsigned row = 0u;
+
+    row++;
+    if (row >= SM16380SC_SCAN_ROWS) {
+        row = 0u;
     }
+    set_row(row);
 }
