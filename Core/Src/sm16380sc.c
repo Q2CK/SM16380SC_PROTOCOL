@@ -16,7 +16,7 @@ enum {
 /* Keep setup/hold visible on a logic analyser. Tune only after first light. */
 static inline void bus_delay(void)
 {
-    for (volatile unsigned i = 0; i < 10u; ++i) {
+    for (volatile unsigned i = 0; i < 1u; ++i) {
         __NOP();
     }
 }
@@ -113,7 +113,7 @@ static void set_row(unsigned row)
     const uint32_t high = pins & SM_ADDR_PIN_MASK;
     const uint32_t low = SM_ADDR_PIN_MASK & ~high;
     SM_ADDR_GPIO->BSRR = (low << 16u) | high;
-    bus_delay();
+    // bus_delay();
 }
 
 static uint16_t make_cfg1(void)
@@ -167,8 +167,13 @@ void SM16380SC_Init(TIM_HandleTypeDef *gclk_timer)
     /*
      * TIM1 runs continuously. Its repetition counter makes one update event
      * after exactly SM16380SC_GCLK_PER_ROW PWM periods, not after every GCLK.
+     * RCR stores N-1. Generate an update before starting so ARR, CCR and the
+     * repetition-counter preload all begin from a known boundary.
      */
+    gclk_timer->Init.RepetitionCounter = SM16380SC_GCLK_PER_ROW - 1u;
+    gclk_timer->Instance->RCR = SM16380SC_GCLK_PER_ROW - 1u;
     __HAL_TIM_SET_COUNTER(gclk_timer, 0u);
+    gclk_timer->Instance->EGR = TIM_EGR_UG;
     __HAL_TIM_CLEAR_FLAG(gclk_timer, TIM_FLAG_UPDATE);
     if (HAL_TIM_PWM_Start(gclk_timer, TIM_CHANNEL_1) != HAL_OK) {
         Error_Handler();
@@ -181,24 +186,23 @@ void SM16380SC_Init(TIM_HandleTypeDef *gclk_timer)
     configure_all_registers();
 }
 
-/*
- * Electrical test image generated without a framebuffer:
- * - vertical red, green, blue, yellow bars;
- * - lower HUB75 half uses a dimmer level;
- * - a white diagonal marks scan-row/output mapping.
- */
-static SM16380SC_Gray6 test_pixel(unsigned row, unsigned chip, unsigned out)
+/* Test images are generated directly from logical display coordinates. */
+typedef struct {
+    uint16_t r;
+    uint16_t g;
+    uint16_t b;
+} TestRGB;
+
+/* Image-space function: x=0..127, y=0..31. No chip/lane knowledge here. */
+static TestRGB test_pixel(unsigned x, unsigned y)
 {
 #if SM16380SC_TEST_PATTERN == SM16380SC_TEST_SOLID_RED
-    (void)row;
-    (void)chip;
-    (void)out;
-    return (SM16380SC_Gray6) {
-        .r1 = SM16380SC_TEST_LEVEL,
-        .r2 = SM16380SC_TEST_LEVEL,
+    (void)x;
+    (void)y;
+    return (TestRGB) {
+        .r = SM16380SC_TEST_LEVEL,
     };
 #elif SM16380SC_TEST_PATTERN == SM16380SC_TEST_RAINBOW
-    const unsigned x = chip * 16u + out;
     const uint16_t full = 0xf000u;
     const unsigned wheel = x * 6u;
     const unsigned segment = wheel / SM16380SC_PANEL_WIDTH;
@@ -219,96 +223,71 @@ static SM16380SC_Gray6 test_pixel(unsigned row, unsigned chip, unsigned out)
     default: r = full;           b = fall;               break;
     }
 
-    (void)row;
-    return (SM16380SC_Gray6) {
-        .r1 = r, .g1 = g, .b1 = b,
-        .r2 = r, .g2 = g, .b2 = b,
-    };
+    (void)y;
+    return (TestRGB) { .r = r, .g = g, .b = b };
 #elif SM16380SC_TEST_PATTERN == SM16380SC_TEST_TV_PATTERN
-    const unsigned x = chip * 16u + out;
     const uint16_t full = 0xf000u;
     const uint16_t dim = 0x3000u;
-    SM16380SC_Gray6 pixel = {0};
+    TestRGB pixel = {0};
 
-    /* Generate one RGB value for each of the two simultaneously driven rows. */
-    for (unsigned half = 0; half < 2u; ++half) {
-        const unsigned y = row + half * SM16380SC_SCAN_ROWS;
-        uint16_t r = 0u, g = 0u, b = 0u;
-
-        if (x == 0u || x == (SM16380SC_PANEL_WIDTH - 1u) ||
-            y == 0u || y == 31u) {
-            /* White frame proves the complete 128x32 extent. */
-            r = g = b = full;
-        } else if (y < 20u) {
-            /* TV bars: white, yellow, cyan, green, magenta, red, blue. */
-            const unsigned bar = (x * 7u) / SM16380SC_PANEL_WIDTH;
-            static const uint8_t colors[7] = {
-                7u, 6u, 3u, 2u, 5u, 4u, 1u
-            };
-            const uint8_t color = colors[bar > 6u ? 6u : bar];
-            if ((color & 4u) != 0u) r = full;
-            if ((color & 2u) != 0u) g = full;
-            if ((color & 1u) != 0u) b = full;
-        } else if (y < 25u) {
-            /* Eight steps from black to white expose bit/brightness errors. */
-            const uint16_t level = (uint16_t)(((x * 8u) /
-                SM16380SC_PANEL_WIDTH) * 0x2000u);
-            r = g = b = level;
-        } else {
-            /* Fine checkerboard plus coloured 16-pixel chip boundaries. */
-            if ((((x >> 2u) ^ (y >> 1u)) & 1u) != 0u) {
-                r = g = b = dim;
-            }
-            if ((x & 15u) == 0u) {
-                r = full;
-                g = (x & 16u) != 0u ? full : 0u;
-                b = (x & 32u) != 0u ? full : 0u;
-            }
+    if (x == 0u || x == (SM16380SC_PANEL_WIDTH - 1u) ||
+        y == 0u || y == 31u) {
+        pixel.r = pixel.g = pixel.b = full;
+    } else if (y < 20u) {
+        const unsigned bar = (x * 7u) / SM16380SC_PANEL_WIDTH;
+        static const uint8_t colors[7] = { 7u, 6u, 3u, 2u, 5u, 4u, 1u };
+        const uint8_t color = colors[bar > 6u ? 6u : bar];
+        if ((color & 4u) != 0u) pixel.r = full;
+        if ((color & 2u) != 0u) pixel.g = full;
+        if ((color & 1u) != 0u) pixel.b = full;
+    } else if (y < 25u) {
+        const uint16_t level = (uint16_t)(((x * 8u) /
+            SM16380SC_PANEL_WIDTH) * 0x2000u);
+        pixel.r = pixel.g = pixel.b = level;
+    } else {
+        if ((((x >> 2u) ^ (y >> 1u)) & 1u) != 0u) {
+            pixel.r = pixel.g = pixel.b = dim;
         }
-
-        if (half == 0u) {
-            pixel.r1 = r; pixel.g1 = g; pixel.b1 = b;
-        } else {
-            pixel.r2 = r; pixel.g2 = g; pixel.b2 = b;
+        if ((x & 15u) == 0u) {
+            pixel.r = full;
+            pixel.g = (x & 16u) != 0u ? full : 0u;
+            pixel.b = (x & 32u) != 0u ? full : 0u;
         }
     }
 
     return pixel;
 #else
-    const unsigned x = chip * 16u + out;
-    const uint16_t top_level = 0x2000u;
-    const uint16_t bottom_level = 0x0800u;
-    SM16380SC_Gray6 pixel = {0};
+    const uint16_t level = y < SM16380SC_SCAN_ROWS ? 0x2000u : 0x0800u;
+    TestRGB pixel = {0};
 
     switch ((x / 16u) & 3u) {
-    case 0u:
-        pixel.r1 = top_level;
-        pixel.r2 = bottom_level;
-        break;
-    case 1u:
-        pixel.g1 = top_level;
-        pixel.g2 = bottom_level;
-        break;
-    case 2u:
-        pixel.b1 = top_level;
-        pixel.b2 = bottom_level;
-        break;
+    case 0u: pixel.r = level; break;
+    case 1u: pixel.g = level; break;
+    case 2u: pixel.b = level; break;
     default:
-        pixel.r1 = top_level;
-        pixel.g1 = top_level;
-        pixel.r2 = bottom_level;
-        pixel.g2 = bottom_level;
+        pixel.r = level;
+        pixel.g = level;
         break;
     }
 
-    if (x == (row % SM16380SC_PANEL_WIDTH)) {
-        pixel.r1 = pixel.g1 = pixel.b1 = 0x3000u;
-        pixel.r2 = pixel.g2 = pixel.b2 = 0x1800u;
+    if (x == y) {
+        pixel.r = pixel.g = pixel.b = 0x3000u;
     }
 
     return pixel;
 #endif
 }
+
+static TestRGB test_animation_pixel(unsigned x, unsigned y, unsigned frame)
+{
+    const unsigned offset = frame % SM16380SC_PANEL_WIDTH;
+    const unsigned source_x =
+        (x + SM16380SC_PANEL_WIDTH - offset) % SM16380SC_PANEL_WIDTH;
+
+    return test_pixel(source_x, y);
+}
+
+
 
 void SM16380SC_UploadTestImage(void)
 {
@@ -321,9 +300,46 @@ void SM16380SC_UploadTestImage(void)
              */
             for (unsigned slot = 0; slot < SM16380SC_CHIPS_PER_LANE; ++slot) {
                 const unsigned chip = slot;
-                const bool final_chip =
-                    slot == (SM16380SC_CHIPS_PER_LANE - 1u);
-                const SM16380SC_Gray6 pixel = test_pixel(row, chip, out);
+                const bool final_chip = slot == (SM16380SC_CHIPS_PER_LANE - 1u);
+                const unsigned x = chip * 16u + out;
+                const TestRGB top = test_pixel(x, row);
+                const TestRGB bottom = test_pixel(
+                    x, row + SM16380SC_SCAN_ROWS);
+                const SM16380SC_Gray6 pixel = {
+                    .r1 = top.r, .g1 = top.g, .b1 = top.b,
+                    .r2 = bottom.r, .g2 = bottom.g, .b2 = bottom.b,
+                };
+
+                shift_gray6(&pixel, final_chip ? 1u : 0u);
+            }
+        }
+    }
+
+    /* Match the working reference's post-upload commit/reconfigure sequence. */
+    send_command(SM_CMD_VSYNC);
+    configure_all_registers();
+}
+
+void SM16380SC_UploadMovingTestImage(unsigned frame)
+{
+    for (unsigned row = 0; row < SM16380SC_SCAN_ROWS; ++row) {
+        for (unsigned out = 0; out < 16u; ++out) {
+            /*
+             * Match the proven driver: logical chip sections are serialized
+             * in increasing x order. The panel's internal cascade performs
+             * the physical shift; reversing here scrambles 16-pixel blocks.
+             */
+            for (unsigned slot = 0; slot < SM16380SC_CHIPS_PER_LANE; ++slot) {
+                const unsigned chip = slot;
+                const bool final_chip = slot == (SM16380SC_CHIPS_PER_LANE - 1u);
+                const unsigned x = chip * 16u + out;
+                const TestRGB top = test_animation_pixel(x, row, frame);
+                const TestRGB bottom = test_animation_pixel(
+                    x, row + SM16380SC_SCAN_ROWS, frame);
+                const SM16380SC_Gray6 pixel = {
+                    .r1 = top.r, .g1 = top.g, .b1 = top.b,
+                    .r2 = bottom.r, .g2 = bottom.g, .b2 = bottom.b,
+                };
 
                 shift_gray6(&pixel, final_chip ? 1u : 0u);
             }

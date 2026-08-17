@@ -104,13 +104,17 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  int frame = 0;
   while (1)
   {
     __WFI();
+    SM16380SC_UploadMovingTestImage(frame%SM16380SC_PANEL_WIDTH);
+
+    frame += 1;
 
     /* USER CODE END WHILE */
 
-  /* USER CODE BEGIN 3 */
+    /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
 }

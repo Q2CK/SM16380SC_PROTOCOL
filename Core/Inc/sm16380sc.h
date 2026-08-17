@@ -30,9 +30,9 @@
 #define SM16380SC_GCLK_PER_ROW \
     ((1024u >> SM16380SC_FMPWM_MODE) + 3u)
 
-/* TIM1 RCR is configured for 131 periods by CubeMX in this implementation. */
-#if SM16380SC_GCLK_PER_ROW != 131u
-#error "Update TIM1 repetition count when changing SM16380SC_FMPWM_MODE"
+/* STM32F446 TIM1 has an 8-bit repetition counter: one burst is at most 256. */
+#if SM16380SC_GCLK_PER_ROW > 256u
+#error "Selected FMPWM mode needs more than one TIM1 RCR burst per row"
 #endif
 
 /*
@@ -88,6 +88,7 @@ typedef struct {
 
 void SM16380SC_Init(TIM_HandleTypeDef *gclk_timer);
 void SM16380SC_UploadTestImage(void);
+void SM16380SC_UploadMovingTestImage(unsigned frame);
 void SM16380SC_RowPeriodElapsed(void);
 
 #endif /* SM16380SC_H */
