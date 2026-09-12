@@ -1,6 +1,8 @@
 #include "sm16380sc.h"
 #include <stdbool.h>
 
+static SM16380SC_HW_Config hw_config;
+
 enum {
     SM_CMD_VSYNC      = 3u,
     SM_CMD_CFG1       = 4u,
@@ -13,107 +15,56 @@ enum {
     SM_CMD_CFG3       = 16u,
 };
 
-/* Keep setup/hold visible on a logic analyser. Tune only after first light. */
-static inline void bus_delay(void)
-{
-    for (volatile unsigned i = 0; i < 1u; ++i) {
-        __NOP();
-    }
-}
-
-static inline void bus_set(uint32_t pins)
-{
-    SM_BUS_GPIO->BSRR = pins;
-}
-
-static inline void bus_clear(uint32_t pins)
-{
-    SM_BUS_GPIO->BSRR = pins << 16u;
-}
-
 static inline void dclk_pulse(void)
 {
-    bus_set(SM_DCLK_PIN);
-    bus_delay();
-    bus_clear(SM_DCLK_PIN);
-    bus_delay();
+    hw_config.set_DCLK();
+    hw_config.bus_delay();
+    hw_config.reset_DCLK();
+    hw_config.bus_delay();
 }
 
-static inline void write_rgb6(uint32_t rgb)
-{
-    const uint32_t high = rgb & SM_RGB_PIN_MASK;
-    const uint32_t low = SM_RGB_PIN_MASK & ~high;
-
-    /* Never request set and reset for the same GPIO in one BSRR write. */
-    SM_BUS_GPIO->BSRR = (low << 16u) | high;
-}
-
-static uint32_t pack_gray_bit(const SM16380SC_Gray6 *gray, unsigned bit)
-{
-    const uint16_t mask = (uint16_t)(1u << bit);
-    uint32_t pins = 0u;
-
-    if ((gray->r1 & mask) != 0u) pins |= SM_R1_PIN;
-    if ((gray->g1 & mask) != 0u) pins |= SM_G1_PIN;
-    if ((gray->b1 & mask) != 0u) pins |= SM_B1_PIN;
-    if ((gray->r2 & mask) != 0u) pins |= SM_R2_PIN;
-    if ((gray->g2 & mask) != 0u) pins |= SM_G2_PIN;
-    if ((gray->b2 & mask) != 0u) pins |= SM_B2_PIN;
-
-    return pins;
+void clear_rgb6() {
+    hw_config.write_rgb6(
+        (SM16380SC_RGB6) {0},
+        0
+    );
 }
 
 /* LE is high for exactly the final le_tail_clocks rising DCLK edges. */
-static void shift_gray6(const SM16380SC_Gray6 *gray,
-                        unsigned le_tail_clocks)
+static void shift_gray6(const SM16380SC_RGB6 rgb, unsigned le_tail_clocks)
 {
     for (int bit = 15; bit >= 0; --bit) {
-        write_rgb6(pack_gray_bit(gray, (unsigned)bit));
+        hw_config.write_rgb6(rgb, (unsigned)bit);
 
         if ((unsigned)bit < le_tail_clocks) {
-            bus_set(SM_LE_PIN);
+            hw_config.set_LE();
         } else {
-            bus_clear(SM_LE_PIN);
+            hw_config.reset_LE();
         }
 
-        bus_delay();
+        hw_config.bus_delay();
         dclk_pulse();
     }
 
-    bus_clear(SM_LE_PIN);
-    write_rgb6(0u);
-    bus_delay();
+    hw_config.reset_LE();
+    clear_rgb6();
+    hw_config.bus_delay();
 }
 
 /* Command clocks are additional clocks and never overlap grayscale payload. */
 static void send_command(unsigned le_high_clocks)
 {
-    bus_clear(SM_LE_PIN | SM_DCLK_PIN);
-    write_rgb6(0u);
-    bus_delay();
-
-    bus_set(SM_LE_PIN);
+    hw_config.reset_LE();
+    hw_config.reset_DCLK();
+    clear_rgb6();
+    hw_config.bus_delay();
+    
+    hw_config.set_LE();
     for (unsigned i = 0; i < le_high_clocks; ++i) {
         dclk_pulse();
     }
-    bus_clear(SM_LE_PIN);
-    bus_delay();
-}
-
-static void set_row(unsigned row)
-{
-    uint32_t pins = 0u;
-
-    if ((row & 0x01u) != 0u) pins |= SM_ADDR_A_PIN;
-    if ((row & 0x02u) != 0u) pins |= SM_ADDR_B_PIN;
-    if ((row & 0x04u) != 0u) pins |= SM_ADDR_C_PIN;
-    if ((row & 0x08u) != 0u) pins |= SM_ADDR_D_PIN;
-    if ((row & 0x10u) != 0u) pins |= SM_ADDR_E_PIN;
-
-    const uint32_t high = pins & SM_ADDR_PIN_MASK;
-    const uint32_t low = SM_ADDR_PIN_MASK & ~high;
-    SM_ADDR_GPIO->BSRR = (low << 16u) | high;
-    // bus_delay();
+    hw_config.reset_LE();
+    hw_config.bus_delay();
 }
 
 static uint16_t make_cfg1(void)
@@ -127,14 +78,14 @@ static uint16_t make_cfg1(void)
 static void broadcast_config(uint16_t red, uint16_t green, uint16_t blue,
                              unsigned selector)
 {
-    const SM16380SC_Gray6 value = {
+    const SM16380SC_RGB6 value = {
         .r1 = red,   .g1 = green, .b1 = blue,
         .r2 = red,   .g2 = green, .b2 = blue,
     };
 
     for (unsigned chip = 0; chip < SM16380SC_CHIPS_PER_LANE; ++chip) {
         const bool final_chip = chip == (SM16380SC_CHIPS_PER_LANE - 1u);
-        shift_gray6(&value, final_chip ? selector : 0u);
+        shift_gray6(value, final_chip ? selector : 0u);
     }
 }
 
@@ -158,11 +109,14 @@ static void configure_all_registers(void)
     write_config(0x0000, 0x0000, 0x0000, SM_CMD_CFG7);
 }
 
-void SM16380SC_Init(TIM_HandleTypeDef *gclk_timer)
+void SM16380SC_Init(SM16380SC_HW_Config config)
 {
-    set_row(0u);
-    write_rgb6(0u);
-    bus_clear(SM_DCLK_PIN | SM_LE_PIN);
+    hw_config = config;
+
+    clear_rgb6();
+    hw_config.set_row(0u);
+    hw_config.reset_LE();
+    hw_config.reset_DCLK();
 
     /*
      * TIM1 runs continuously. Its repetition counter makes one update event
@@ -170,16 +124,7 @@ void SM16380SC_Init(TIM_HandleTypeDef *gclk_timer)
      * RCR stores N-1. Generate an update before starting so ARR, CCR and the
      * repetition-counter preload all begin from a known boundary.
      */
-    gclk_timer->Init.RepetitionCounter = SM16380SC_GCLK_PER_ROW - 1u;
-    gclk_timer->Instance->RCR = SM16380SC_GCLK_PER_ROW - 1u;
-    __HAL_TIM_SET_COUNTER(gclk_timer, 0u);
-    gclk_timer->Instance->EGR = TIM_EGR_UG;
-    __HAL_TIM_CLEAR_FLAG(gclk_timer, TIM_FLAG_UPDATE);
-    if (HAL_TIM_PWM_Start(gclk_timer, TIM_CHANNEL_1) != HAL_OK) {
-        Error_Handler();
-    }
-    __HAL_TIM_CLEAR_FLAG(gclk_timer, TIM_FLAG_UPDATE);
-    __HAL_TIM_ENABLE_IT(gclk_timer, TIM_IT_UPDATE);
+    hw_config.setup_GCLK_timer();
 
     /* Original SM16380/SM16380SC seven-register initialization. */
     send_command(SM_CMD_VSYNC);
@@ -305,12 +250,12 @@ void SM16380SC_UploadTestImage(void)
                 const TestRGB top = test_pixel(x, row);
                 const TestRGB bottom = test_pixel(
                     x, row + SM16380SC_SCAN_ROWS);
-                const SM16380SC_Gray6 pixel = {
+                const SM16380SC_RGB6 pixel = {
                     .r1 = top.r, .g1 = top.g, .b1 = top.b,
                     .r2 = bottom.r, .g2 = bottom.g, .b2 = bottom.b,
                 };
 
-                shift_gray6(&pixel, final_chip ? 1u : 0u);
+                shift_gray6(pixel, final_chip ? 1u : 0u);
             }
         }
     }
@@ -336,12 +281,12 @@ void SM16380SC_UploadMovingTestImage(unsigned frame)
                 const TestRGB top = test_animation_pixel(x, row, frame);
                 const TestRGB bottom = test_animation_pixel(
                     x, row + SM16380SC_SCAN_ROWS, frame);
-                const SM16380SC_Gray6 pixel = {
+                const SM16380SC_RGB6 pixel = {
                     .r1 = top.r, .g1 = top.g, .b1 = top.b,
                     .r2 = bottom.r, .g2 = bottom.g, .b2 = bottom.b,
                 };
 
-                shift_gray6(&pixel, final_chip ? 1u : 0u);
+                shift_gray6(pixel, final_chip ? 1u : 0u);
             }
         }
     }
@@ -359,5 +304,5 @@ void SM16380SC_RowPeriodElapsed(void)
     if (row >= SM16380SC_SCAN_ROWS) {
         row = 0u;
     }
-    set_row(row);
+    hw_config.set_row(row);
 }

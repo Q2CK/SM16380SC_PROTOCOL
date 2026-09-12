@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "sm16380sc.h"
+#include "stm32f4xx_hal_tim.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -53,6 +54,15 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
+
+void setup_GCLK_timer();
+void bus_delay();
+void set_LE();
+void reset_LE();
+void set_DCLK();
+void reset_DCLK();
+void set_row(unsigned);
+void write_rgb6(const SM16380SC_RGB6, unsigned);
 
 /* USER CODE END PFP */
 
@@ -92,7 +102,16 @@ int main(void)
   MX_GPIO_Init();
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
-  SM16380SC_Init(&htim1);
+  SM16380SC_Init((SM16380SC_HW_Config) {
+    .setup_GCLK_timer = setup_GCLK_timer,
+    .bus_delay = bus_delay,
+    .set_LE = set_LE,
+    .reset_LE = reset_LE,
+    .set_DCLK = set_DCLK,
+    .reset_DCLK = reset_DCLK,
+    .set_row = set_row,
+    .write_rgb6 = write_rgb6
+  });
   SM16380SC_UploadTestImage();
   /* USER CODE END 2 */
 
@@ -307,8 +326,81 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
+#define SM_RGB_PIN_MASK \
+  (SM_R1_Pin | SM_G1_Pin | SM_B1_Pin | SM_R2_Pin | SM_G2_Pin | SM_B2_Pin)
+
+#define SM_ADDR_PIN_MASK \
+  (SM_ADDR_A_Pin | SM_ADDR_B_Pin | SM_ADDR_C_Pin | SM_ADDR_D_Pin | SM_ADDR_E_Pin)
+
+
+void setup_GCLK_timer() {
+  TIM_HandleTypeDef *gclk_timer = &htim1;
+  gclk_timer->Init.RepetitionCounter = SM16380SC_GCLK_PER_ROW - 1u;
+  gclk_timer->Instance->RCR = SM16380SC_GCLK_PER_ROW - 1u;
+  __HAL_TIM_SET_COUNTER(gclk_timer, 0u);
+  gclk_timer->Instance->EGR = TIM_EGR_UG;
+  __HAL_TIM_CLEAR_FLAG(gclk_timer, TIM_FLAG_UPDATE);
+  if (HAL_TIM_PWM_Start(gclk_timer, TIM_CHANNEL_1) != HAL_OK) {
+      Error_Handler();
+  }
+  __HAL_TIM_CLEAR_FLAG(gclk_timer, TIM_FLAG_UPDATE);
+  __HAL_TIM_ENABLE_IT(gclk_timer, TIM_IT_UPDATE);
+}
+
+void bus_delay() {
+  __NOP();
+}
+
+void set_LE() {
+  SM_LE_GPIO_Port->BSRR = SM_LE_Pin;
+}
+
+void reset_LE() {
+  SM_LE_GPIO_Port->BSRR = SM_LE_Pin << 16;
+}
+
+void set_DCLK() {
+  SM_LE_GPIO_Port->BSRR = SM_DCLK_Pin;
+}
+
+void reset_DCLK() {
+  SM_LE_GPIO_Port->BSRR = SM_DCLK_Pin << 16;
+}
+
+void set_row(unsigned row) {
+  uint32_t pins = 0u;
+
+  if ((row & 0x01u) != 0u) pins |= SM_ADDR_A_Pin;
+  if ((row & 0x02u) != 0u) pins |= SM_ADDR_B_Pin;
+  if ((row & 0x04u) != 0u) pins |= SM_ADDR_C_Pin;
+  if ((row & 0x08u) != 0u) pins |= SM_ADDR_D_Pin;
+  if ((row & 0x10u) != 0u) pins |= SM_ADDR_E_Pin;
+
+  const uint32_t high = pins & SM_ADDR_PIN_MASK;
+  const uint32_t low = SM_ADDR_PIN_MASK & ~high;
+  SM_ADDR_A_GPIO_Port->BSRR = (low << 16u) | high;
+  // bus_delay();
+}
+
+void write_rgb6(const SM16380SC_RGB6 rgb, unsigned bit) {
+  const uint16_t mask = (uint16_t)(1u << bit);
+  uint32_t pins = 0u;
+
+  if ((rgb.r1 & mask) != 0u) pins |= SM_R1_Pin;
+  if ((rgb.g1 & mask) != 0u) pins |= SM_G1_Pin;
+  if ((rgb.b1 & mask) != 0u) pins |= SM_B1_Pin;
+  if ((rgb.r2 & mask) != 0u) pins |= SM_R2_Pin;
+  if ((rgb.g2 & mask) != 0u) pins |= SM_G2_Pin;
+  if ((rgb.b2 & mask) != 0u) pins |= SM_B2_Pin;
+
+  const uint32_t high = pins & SM_RGB_PIN_MASK;
+  const uint32_t low = SM_RGB_PIN_MASK & ~high;
+
+  /* Never request set and reset for the same GPIO in one BSRR write. */
+  SM_R1_GPIO_Port->BSRR = (low << 16u) | high;
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   if (htim->Instance == TIM1)
   {
     SM16380SC_RowPeriodElapsed();

@@ -1,7 +1,6 @@
 #ifndef SM16380SC_H
 #define SM16380SC_H
 
-#include "main.h"
 #include <stdint.h>
 
 /*
@@ -55,27 +54,6 @@
  * D      -> PB7
  * E      -> PB8
  */
-#define SM_BUS_GPIO               SM_DCLK_GPIO_Port
-#define SM_DCLK_PIN               SM_DCLK_Pin
-#define SM_LE_PIN                 SM_LE_Pin
-#define SM_R1_PIN                 SM_R1_Pin
-#define SM_G1_PIN                 SM_G1_Pin
-#define SM_B1_PIN                 SM_B1_Pin
-#define SM_R2_PIN                 SM_R2_Pin
-#define SM_G2_PIN                 SM_G2_Pin
-#define SM_B2_PIN                 SM_B2_Pin
-
-#define SM_ADDR_GPIO              SM_ADDR_A_GPIO_Port
-#define SM_ADDR_A_PIN             SM_ADDR_A_Pin
-#define SM_ADDR_B_PIN             SM_ADDR_B_Pin
-#define SM_ADDR_C_PIN             SM_ADDR_C_Pin
-#define SM_ADDR_D_PIN             SM_ADDR_D_Pin
-#define SM_ADDR_E_PIN             SM_ADDR_E_Pin
-
-#define SM_RGB_PIN_MASK \
-    (SM_R1_PIN | SM_G1_PIN | SM_B1_PIN | SM_R2_PIN | SM_G2_PIN | SM_B2_PIN)
-#define SM_ADDR_PIN_MASK \
-    (SM_ADDR_A_PIN | SM_ADDR_B_PIN | SM_ADDR_C_PIN | SM_ADDR_D_PIN | SM_ADDR_E_PIN)
 
 typedef struct {
     uint16_t r1;
@@ -84,9 +62,20 @@ typedef struct {
     uint16_t r2;
     uint16_t g2;
     uint16_t b2;
-} SM16380SC_Gray6;
+} SM16380SC_RGB6;
 
-void SM16380SC_Init(TIM_HandleTypeDef *gclk_timer);
+typedef struct {
+    void (*setup_GCLK_timer)();
+    void (*bus_delay)();
+    void (*set_LE)();
+    void (*reset_LE)();
+    void (*set_DCLK)();
+    void (*reset_DCLK)();
+    void (*set_row)(unsigned);
+    void (*write_rgb6)(const SM16380SC_RGB6, unsigned);
+} SM16380SC_HW_Config;
+
+void SM16380SC_Init(SM16380SC_HW_Config config);
 void SM16380SC_UploadTestImage(void);
 void SM16380SC_UploadMovingTestImage(unsigned frame);
 void SM16380SC_RowPeriodElapsed(void);
