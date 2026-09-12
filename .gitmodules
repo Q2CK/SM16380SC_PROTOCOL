@@ -1,0 +1,3 @@
+[submodule "libsm16380sc"]
+	path = lib/libsm16380sc
+	url = https://github.com/Q2CK/libsm16380sc
